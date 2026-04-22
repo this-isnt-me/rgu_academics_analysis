@@ -505,3 +505,140 @@ def compute_school_metagraph(nodes_data, edges_data):
     ]).sort_values("Betweenness Score", ascending=False).reset_index(drop=True)
 
     return meta_G, school_sizes, pair_df, bc_df
+
+
+# ---------------------------------------------------------------------------
+# School bridges
+# ---------------------------------------------------------------------------
+
+@st.cache_data
+def compute_school_bridges(nodes_data, edges_data, betweenness_tuple) -> pd.DataFrame:
+    """
+    Identify the top bridging academic between every pair of schools that share
+    at least one co-authorship edge in the filtered graph.
+
+    For each school pair (A, B) the function:
+    1. Collects all cross-boundary edges between academics in A and academics in B.
+    2. Builds a candidate pool of academics incident to those edges.
+    3. Ranks candidates by their pre-computed global betweenness centrality and
+       selects the top-ranked node as the primary bridge.
+    4. Computes bridge_strength = (weight of cross-boundary edges incident to the
+       bridge node) / (total weight of all cross-boundary edges for that pair).
+
+    Parameters
+    ----------
+    nodes_data : tuple
+        Serialised node data from graph_to_cache_args(). Used as the cache key.
+    edges_data : tuple
+        Serialised edge data from graph_to_cache_args(). Used as the cache key.
+    betweenness_tuple : tuple
+        Pre-computed global betweenness centrality expressed as
+        ``tuple(sorted(bc.items()))`` so it is hashable for caching.
+        Must have been computed on the same filtered graph represented by
+        nodes_data / edges_data.  The caller is responsible for ensuring this;
+        typically obtained via compute_betweenness_centrality(nodes_data, edges_data)
+        from utils.centrality, which is itself cached.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: school_a, school_b, bridge_academic, bridge_job_title,
+        bridge_school, betweenness_score, bridge_strength, total_cross_papers,
+        bridge_papers, num_candidates, fragility_flag.
+        Sorted by bridge_strength descending.
+
+    Notes
+    -----
+    Relies entirely on the undirected graph representation.  Each cross-boundary
+    edge is treated as mutual; a node is a candidate if it is incident to at least
+    one edge crossing the school boundary for that pair.  The fragility threshold
+    of 0.5 (50 %) is a heuristic and should be considered alongside the absolute
+    paper counts — in small school pairs a high bridge_strength may simply reflect
+    a naturally limited collaboration pool.
+    """
+    G = rebuild_graph(nodes_data, edges_data)
+    betweenness = dict(betweenness_tuple)
+
+    # Index nodes by school for fast lookup
+    school_nodes: dict[str, set] = {}
+    for n in G.nodes():
+        s = G.nodes[n].get("school", "")
+        if s:
+            school_nodes.setdefault(s, set()).add(n)
+
+    schools = sorted(school_nodes.keys())
+    rows = []
+
+    for idx_a, school_a in enumerate(schools):
+        for school_b in schools[idx_a + 1:]:
+            nodes_a = school_nodes[school_a]
+            nodes_b = school_nodes[school_b]
+
+            # Collect every edge that crosses this specific school boundary
+            cross_edges: list[tuple] = []
+            for u, v, d in G.edges(data=True):
+                a_to_b = (u in nodes_a and v in nodes_b)
+                b_to_a = (u in nodes_b and v in nodes_a)
+                if a_to_b or b_to_a:
+                    cross_edges.append((u, v, d.get("weight", 1)))
+
+            if not cross_edges:
+                continue
+
+            total_cross_papers = sum(w for _, _, w in cross_edges)
+
+            # Candidate pool: every node incident to a cross-boundary edge
+            candidates: set = set()
+            for u, v, _ in cross_edges:
+                candidates.add(u)
+                candidates.add(v)
+
+            # Rank by global betweenness; tie-break alphabetically on label for
+            # determinism
+            def _sort_key(n):
+                return (-betweenness.get(n, 0.0), G.nodes[n].get("label", n))
+
+            ranked = sorted(candidates, key=_sort_key)
+            bridge_node = ranked[0]
+
+            d_node = G.nodes[bridge_node]
+            bridge_name = d_node.get("label", bridge_node)
+            bridge_jt = d_node.get("job_title", "")
+            bridge_sch = d_node.get("school", "")
+            bc_score = betweenness.get(bridge_node, 0.0)
+
+            # Bridge strength: share of cross-boundary weight incident to bridge node
+            bridge_papers = sum(
+                w for u, v, w in cross_edges
+                if u == bridge_node or v == bridge_node
+            )
+            bridge_strength = (
+                bridge_papers / total_cross_papers if total_cross_papers > 0 else 0.0
+            )
+
+            rows.append({
+                "school_a": school_a,
+                "school_b": school_b,
+                "bridge_academic": bridge_name,
+                "bridge_job_title": bridge_jt,
+                "bridge_school": bridge_sch,
+                "betweenness_score": round(bc_score, 4),
+                "bridge_strength": round(bridge_strength, 4),
+                "total_cross_papers": int(total_cross_papers),
+                "bridge_papers": int(bridge_papers),
+                "num_candidates": len(candidates),
+                "fragility_flag": bool(bridge_strength > 0.5),
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=[
+            "school_a", "school_b", "bridge_academic", "bridge_job_title",
+            "bridge_school", "betweenness_score", "bridge_strength",
+            "total_cross_papers", "bridge_papers", "num_candidates", "fragility_flag",
+        ])
+
+    return (
+        pd.DataFrame(rows)
+        .sort_values("bridge_strength", ascending=False)
+        .reset_index(drop=True)
+    )

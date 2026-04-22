@@ -275,3 +275,188 @@ def school_legend_html(color_map: dict) -> str:
         for s, c in color_map.items()
     ]
     return "  &nbsp;|&nbsp;  ".join(items)
+
+
+def plot_school_bridge_network(bridge_df: pd.DataFrame, school_meta_G) -> go.Figure:
+    """
+    Render the school-to-school co-authorship network as a Plotly figure with
+    edges coloured by bridge fragility.
+
+    Edge colour encoding:
+    - Red   (#d62728) : fragility_flag is True  (bridge_strength > 0.50)
+    - Amber (#ff7f0e) : bridge_strength 0.30–0.50
+    - Green (#2ca02c) : bridge_strength < 0.30
+
+    Each edge is labelled with the top bridge academic's name and their
+    bridge_strength expressed as a percentage.
+
+    Parameters
+    ----------
+    bridge_df : pd.DataFrame
+        Output of compute_school_bridges().  Must contain columns: school_a,
+        school_b, bridge_academic, bridge_job_title, bridge_strength,
+        fragility_flag, total_cross_papers, bridge_papers.
+    school_meta_G : nx.Graph
+        School-level meta-graph from compute_school_metagraph().  Node attribute
+        ``size`` gives the number of academics in that school.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive Plotly figure using go.Scatter traces; no PyVis dependency.
+
+    Notes
+    -----
+    Node positions are determined by nx.spring_layout with seed=42 for
+    reproducibility.  Edge width scales logarithmically with total co-authored
+    papers between the two schools.
+    """
+    if school_meta_G.number_of_nodes() == 0 or bridge_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="No inter-school bridge data available.")
+        return fig
+
+    pos = nx.spring_layout(school_meta_G, weight="weight", seed=42)
+
+    # Build a lookup keyed by frozenset({school_a, school_b})
+    bridge_lookup: dict = {}
+    for _, row in bridge_df.iterrows():
+        key = frozenset([row["school_a"], row["school_b"]])
+        bridge_lookup[key] = row
+
+    # ------------------------------------------------------------------
+    # Edge traces
+    # ------------------------------------------------------------------
+    edge_traces: list = []
+
+    for u, v, d in school_meta_G.edges(data=True):
+        key = frozenset([u, v])
+        row = bridge_lookup.get(key)
+        w = d.get("weight", 1)
+
+        if row is not None:
+            strength = float(row["bridge_strength"])
+            if bool(row["fragility_flag"]):
+                edge_color = "#d62728"   # red
+            elif strength >= 0.30:
+                edge_color = "#ff7f0e"   # amber
+            else:
+                edge_color = "#2ca02c"   # green
+
+            edge_hover = (
+                f"<b>{u} \u2194 {v}</b><br>"
+                f"Bridge Academic: {row['bridge_academic']}<br>"
+                f"Job Title: {row['bridge_job_title']}<br>"
+                f"Bridge Strength: {round(strength * 100, 1)}\u202f%<br>"
+                f"Total Cross-School Papers: {row['total_cross_papers']}<br>"
+                f"Bridge Papers: {row['bridge_papers']}"
+            )
+            mid_label = (
+                f"{row['bridge_academic']}<br>"
+                f"{round(strength * 100, 1)}\u202f%"
+            )
+        else:
+            edge_color = "#aaaaaa"
+            edge_hover = f"{u} \u2194 {v}: {w} papers"
+            mid_label = ""
+
+        x0, y0 = pos[u]
+        x1, y1 = pos[v]
+
+        edge_traces.append(go.Scatter(
+            x=[x0, x1, None],
+            y=[y0, y1, None],
+            mode="lines",
+            line=dict(width=max(1.5, min(8.0, 1.0 + np.log1p(w))), color=edge_color),
+            hoverinfo="text",
+            hovertext=edge_hover,
+            showlegend=False,
+        ))
+
+        # Label at edge midpoint
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+        edge_traces.append(go.Scatter(
+            x=[mx], y=[my],
+            mode="text",
+            text=[mid_label],
+            textfont=dict(size=8, color=edge_color),
+            hoverinfo="none",
+            showlegend=False,
+        ))
+
+    # ------------------------------------------------------------------
+    # Node trace
+    # ------------------------------------------------------------------
+    schools = list(school_meta_G.nodes())
+    color_map = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(sorted(schools))}
+
+    node_x, node_y = [], []
+    node_text, node_hover = [], []
+    node_sizes, node_colors = [], []
+
+    for s in schools:
+        x, y = pos[s]
+        sz = school_meta_G.nodes[s].get("size", 1)
+        n_conn = school_meta_G.degree(s)
+        node_x.append(x)
+        node_y.append(y)
+        node_text.append(s)
+        node_hover.append(
+            f"<b>{s}</b><br>"
+            f"Academics: {sz}<br>"
+            f"School-pair connections: {n_conn}"
+        )
+        node_sizes.append(20 + 3 * sz)
+        node_colors.append(color_map[s])
+
+    node_trace = go.Scatter(
+        x=node_x, y=node_y,
+        mode="markers+text",
+        text=node_text,
+        textposition="top center",
+        hovertext=node_hover,
+        hoverinfo="text",
+        marker=dict(
+            size=node_sizes,
+            color=node_colors,
+            line=dict(width=2, color="white"),
+        ),
+        showlegend=False,
+    )
+
+    # ------------------------------------------------------------------
+    # Dummy traces for colour legend
+    # ------------------------------------------------------------------
+    legend_traces = [
+        go.Scatter(
+            x=[None], y=[None], mode="lines",
+            line=dict(color="#d62728", width=4),
+            name="High fragility — >50% through one person",
+            showlegend=True,
+        ),
+        go.Scatter(
+            x=[None], y=[None], mode="lines",
+            line=dict(color="#ff7f0e", width=4),
+            name="Moderate — 30–50% through one person",
+            showlegend=True,
+        ),
+        go.Scatter(
+            x=[None], y=[None], mode="lines",
+            line=dict(color="#2ca02c", width=4),
+            name="Distributed — <30% through one person",
+            showlegend=True,
+        ),
+    ]
+
+    fig = go.Figure(data=edge_traces + [node_trace] + legend_traces)
+    fig.update_layout(
+        title="School Bridge Network — edge colour indicates bridge fragility",
+        showlegend=True,
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01,
+                    bgcolor="rgba(255,255,255,0.8)", bordercolor="#cccccc", borderwidth=1),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        height=640,
+        margin=dict(l=20, r=20, t=50, b=20),
+    )
+    return fig

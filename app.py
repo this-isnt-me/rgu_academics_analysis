@@ -44,6 +44,7 @@ from utils.ona_metrics import (
     classify_community_roles,
     compute_ei_index,
     compute_school_metagraph,
+    compute_school_bridges,
 )
 from utils.visualisation import (
     get_school_color_map,
@@ -52,6 +53,7 @@ from utils.visualisation import (
     plot_scatter,
     plot_heatmap,
     plot_school_network,
+    plot_school_bridge_network,
     plot_stacked_bar,
     plot_boxplot,
     plot_grouped_bar,
@@ -101,8 +103,9 @@ PAGES = [
     "8. Community Detection & Research Tribes",
     "9. Interdepartmental Synergy (E-I Index)",
     "10. School-Level Collaboration Map",
-    "11. HITS Analysis — Hubs & Authorities",
-    "12. Download & Export",
+    "11. School Bridges & Key Connectors",
+    "12. HITS Analysis — Hubs & Authorities",
+    "13. Download & Export",
 ]
 
 page = st.sidebar.radio("Navigate to:", PAGES, label_visibility="collapsed")
@@ -1294,6 +1297,241 @@ def page_download():
 
 
 # ============================================================
+# Page 11 — School Bridges & Key Connectors
+# ============================================================
+def page_school_bridges():
+    st.header("School Bridges & Key Connectors")
+    st.caption(
+        "Identifying the academics whose co-authorship record is the primary link between each pair "
+        "of schools — and quantifying the institutional risk if that link were lost."
+    )
+
+    # Guard: need ≥ 2 schools
+    present_schools = {G.nodes[n].get("school", "") for n in G.nodes() if G.nodes[n].get("school")}
+    if len(present_schools) < 2:
+        st.warning(
+            "Fewer than two schools are present in the current filter selection. "
+            "Bridge analysis requires at least two schools. Please broaden your filters."
+        )
+        return
+
+    if not min_nodes_ok(G):
+        return
+
+    nd, ed = graph_to_cache_args(G)
+
+    st.info(
+        "Every line connecting two schools in RGU's co-authorship network passes through individual "
+        "academics. This page identifies, for each pair of connected schools, the single person whose "
+        "publication record contributes most to that inter-school link — and measures how much of that "
+        "connection depends on them alone. A Bridge Strength of 100% means every co-authored paper "
+        "between those two schools involves this one individual. If they were to leave RGU or reduce "
+        "their collaborative activity, that inter-school co-authorship connection would disappear "
+        "entirely from the published record. These findings are not a criticism of those individuals "
+        "— they are a structural signal that RGU needs to build additional co-authorship bridges "
+        "alongside the ones that already exist."
+    )
+
+    # Obtain betweenness from the existing cache — do not recompute
+    bc = safe_run(compute_betweenness_centrality, nd, ed, label="betweenness centrality")
+    if bc is None:
+        return
+    betweenness_tuple = tuple(sorted(bc.items()))
+
+    bridge_df = safe_run(
+        compute_school_bridges, nd, ed, betweenness_tuple, label="school bridges"
+    )
+    if bridge_df is None or bridge_df.empty:
+        st.info("No inter-school co-authorship connections were found for the current filter selection.")
+        return
+
+    # ---- Key metric cards ----
+    n_pairs = len(bridge_df)
+    n_fragile = int(bridge_df["fragility_flag"].sum())
+    unique_bridges = bridge_df["bridge_academic"].nunique()
+
+    bridge_counts = bridge_df["bridge_academic"].value_counts()
+    top_bridge_name = bridge_counts.index[0]
+    top_bridge_count = int(bridge_counts.iloc[0])
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("School pairs with co-authorship", n_pairs)
+    c2.metric("High-fragility bridges", n_fragile)
+    c3.metric("Academics acting as school bridges", unique_bridges)
+    c4.metric(
+        "Most frequent bridge",
+        top_bridge_name,
+        delta=f"{top_bridge_count} school-pair connection{'s' if top_bridge_count != 1 else ''}",
+        delta_color="off",
+    )
+
+    # ---- Bridge network visualisation ----
+    st.subheader("Bridge Network")
+    st.markdown(
+        "**Colour key:** "
+        '<span style="color:#d62728;font-weight:bold">■ Red</span> = high fragility (&gt;50% of cross-school papers through one person)&nbsp;&nbsp;'
+        '<span style="color:#ff7f0e;font-weight:bold">■ Amber</span> = moderate (30–50%)&nbsp;&nbsp;'
+        '<span style="color:#2ca02c;font-weight:bold">■ Green</span> = distributed (&lt;30%)',
+        unsafe_allow_html=True,
+    )
+
+    meta_result = safe_run(compute_school_metagraph, nd, ed, label="school meta-graph")
+    if meta_result:
+        meta_G, school_sizes, _, _ = meta_result
+        fig_bridge = safe_run(
+            plot_school_bridge_network, bridge_df, meta_G, label="bridge network chart"
+        )
+        if fig_bridge:
+            st.plotly_chart(fig_bridge, use_container_width=True)
+
+    # ---- Fragility alert ----
+    fragile_rows = bridge_df[bridge_df["fragility_flag"]]
+    if not fragile_rows.empty:
+        bullets = []
+        for _, row in fragile_rows.iterrows():
+            pct = round(row["bridge_strength"] * 100, 1)
+            bullets.append(
+                f"**{row['school_a']} ↔ {row['school_b']}:** "
+                f"{row['bridge_academic']} ({row['bridge_job_title']}) accounts for "
+                f"**{pct}%** of all co-authored papers between these schools "
+                f"({row['bridge_papers']} of {row['total_cross_papers']} papers)."
+            )
+        st.warning(
+            "**High-fragility bridges detected** — the following inter-school co-authorship "
+            "connections are dependent on a single individual:\n\n" + "\n\n".join(f"- {b}" for b in bullets)
+        )
+    else:
+        st.success(
+            "No single-point-of-failure bridges detected in the current filter selection."
+        )
+
+    # ---- Full bridge table ----
+    st.subheader("Full Bridge Table")
+
+    display_df = bridge_df.rename(columns={
+        "school_a": "School A",
+        "school_b": "School B",
+        "bridge_academic": "Bridge Academic",
+        "bridge_job_title": "Job Title",
+        "bridge_school": "Bridge School",
+        "betweenness_score": "Betweenness Score",
+        "bridge_strength": "Bridge Strength",
+        "total_cross_papers": "Total Cross-School Papers",
+        "bridge_papers": "Bridge Papers",
+        "num_candidates": "Candidates Considered",
+        "fragility_flag": "High Fragility",
+    }).copy()
+
+    # Format bridge strength as percentage
+    display_df["Bridge Strength"] = display_df["Bridge Strength"].apply(
+        lambda x: f"{x * 100:.1f}%"
+    )
+
+    def _highlight_fragile(row):
+        return (
+            ["background-color: #ffe4e1"] * len(row)
+            if row["High Fragility"]
+            else [""] * len(row)
+        )
+
+    st.dataframe(
+        display_df.style.apply(_highlight_fragile, axis=1),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # ---- Per-school bridge profile ----
+    st.subheader("Per-School Bridge Profile")
+    all_schools_in_bridges = sorted(
+        set(bridge_df["school_a"].tolist() + bridge_df["school_b"].tolist())
+    )
+    selected_school = st.selectbox("Explore bridges for a specific school:", all_schools_in_bridges)
+
+    school_mask = (
+        (bridge_df["school_a"] == selected_school) |
+        (bridge_df["school_b"] == selected_school)
+    )
+    school_bridge_df = bridge_df[school_mask].copy()
+
+    n_connections = len(school_bridge_df)
+    n_fragile_school = int(school_bridge_df["fragility_flag"].sum())
+
+    # Most frequent bridge academic representing this school (bridge_school == selected_school)
+    rep_mask = school_bridge_df["bridge_school"] == selected_school
+    if rep_mask.any():
+        rep_counts = school_bridge_df.loc[rep_mask, "bridge_academic"].value_counts()
+        most_freq_rep = rep_counts.index[0]
+        most_freq_rep_jt = school_bridge_df.loc[
+            school_bridge_df["bridge_academic"] == most_freq_rep, "bridge_job_title"
+        ].iloc[0]
+        # Count across ALL bridge_df rows (global)
+        global_count = int((bridge_df["bridge_academic"] == most_freq_rep).sum())
+        rep_summary = (
+            f"The most frequent bridge academic representing **{selected_school}** is "
+            f"**{most_freq_rep}** ({most_freq_rep_jt}), appearing in "
+            f"**{global_count}** school-pair connection{'s' if global_count != 1 else ''} globally."
+        )
+    else:
+        rep_summary = (
+            f"No academics from **{selected_school}** are identified as the top bridge "
+            "for any school pair in the current selection."
+        )
+
+    st.markdown(
+        f"**{selected_school}** appears in **{n_connections}** inter-school co-authorship "
+        f"connection{'s' if n_connections != 1 else ''}. "
+        f"It has **{n_fragile_school}** high-fragility bridge{'s' if n_fragile_school != 1 else ''}. "
+        + rep_summary
+    )
+
+    school_display_df = school_bridge_df.rename(columns={
+        "school_a": "School A",
+        "school_b": "School B",
+        "bridge_academic": "Bridge Academic",
+        "bridge_job_title": "Job Title",
+        "bridge_school": "Bridge School",
+        "betweenness_score": "Betweenness Score",
+        "bridge_strength": "Bridge Strength",
+        "total_cross_papers": "Total Cross-School Papers",
+        "bridge_papers": "Bridge Papers",
+        "num_candidates": "Candidates Considered",
+        "fragility_flag": "High Fragility",
+    }).copy()
+    school_display_df["Bridge Strength"] = school_display_df["Bridge Strength"].apply(
+        lambda x: f"{x * 100:.1f}%"
+    )
+    st.dataframe(
+        school_display_df.style.apply(_highlight_fragile, axis=1),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Technical notes"):
+        st.markdown(
+            """
+            - **Bridge identification:** for each school pair the candidate pool is every academic
+              incident to at least one cross-boundary edge between those two schools. Candidates are
+              ranked by their global betweenness centrality (pre-computed on the full filtered graph
+              using `nx.betweenness_centrality(G, weight='weight', normalized=True)`). The
+              highest-ranked candidate is selected as the primary bridge.
+            - **Bridge strength:** the share of total cross-boundary edge weight (co-authored papers)
+              between the two schools that is incident to the bridge node.
+              `bridge_strength = bridge_papers / total_cross_papers`.
+              A score of 1.0 means every co-authored paper between those schools involves this person.
+            - **Fragility threshold:** the 50% threshold used for `fragility_flag` is a heuristic.
+              In school pairs with very few co-authored papers, high bridge strength may reflect a
+              naturally small collaboration pool rather than genuine structural dependency. Always
+              consider `total_cross_papers` alongside `bridge_strength`.
+            - **Tie-breaking:** when multiple candidates share the highest betweenness score, the
+              tie is broken alphabetically by display name for determinism.
+            - All computations use the undirected graph only — each co-authored paper between a
+              pair of academics is represented as a single undirected edge with a weight equal to
+              the number of jointly published papers.
+            """
+        )
+
+
+# ============================================================
 # Router
 # ============================================================
 ROUTE_MAP = {
@@ -1307,8 +1545,9 @@ ROUTE_MAP = {
     "8. Community Detection & Research Tribes": page_communities,
     "9. Interdepartmental Synergy (E-I Index)": page_ei_index,
     "10. School-Level Collaboration Map": page_school_map,
-    "11. HITS Analysis — Hubs & Authorities": page_hits,
-    "12. Download & Export": page_download,
+    "11. School Bridges & Key Connectors": page_school_bridges,
+    "12. HITS Analysis — Hubs & Authorities": page_hits,
+    "13. Download & Export": page_download,
 }
 
 ROUTE_MAP[page]()
