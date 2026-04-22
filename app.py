@@ -5,7 +5,12 @@ All analyses operate on undirected co-authorship graphs only.
 from __future__ import annotations
 
 import io
+import os
 import traceback
+
+import streamlit_authenticator as stauth
+import yaml
+from yaml.loader import SafeLoader
 
 import networkx as nx
 import pandas as pd
@@ -71,6 +76,46 @@ st.set_page_config(
 )
 
 # ============================================================
+# Authentication — config and initialisation
+# ============================================================
+if not os.path.exists("config.yaml"):
+    st.error(
+        "**config.yaml not found.** Please create it from the project template "
+        "before running the app. See the project README for instructions."
+    )
+    st.stop()
+
+with open("config.yaml") as _f:
+    _config = yaml.load(_f, Loader=SafeLoader)
+
+# SECURITY NOTES — MUST READ BEFORE DEPLOYMENT
+# 1. Run generate_passwords.py to hash all passwords before deploying.
+# 2. Change the cookie key in config.yaml to a long random string before deploying.
+# 3. Never commit config.yaml to a public Git repository — it is in .gitignore.
+# 4. Set cookie expiry_days to 0 in config.yaml for session-only login (no persistent cookie).
+authenticator = stauth.Authenticate(
+    _config["credentials"],
+    _config["cookie"]["name"],
+    _config["cookie"]["key"],
+    _config["cookie"]["expiry_days"],
+)
+
+# ============================================================
+# Auth gate — show login form if not yet authenticated
+# ============================================================
+if st.session_state.get("authentication_status") is not True:
+    _, _login_col, _ = st.columns([3, 4, 3])
+    with _login_col:
+        authenticator.login()
+    if st.session_state.get("authentication_status") is False:
+        st.error("Username or password is incorrect.")
+    else:
+        st.warning(
+            "Please enter your credentials to access the RGU Research Network Analyser."
+        )
+    st.stop()
+
+# ============================================================
 # Load graph
 # ============================================================
 G_full, load_error = load_graph()
@@ -89,6 +134,9 @@ if G_full.is_directed():
 # ============================================================
 # Sidebar — navigation & filters
 # ============================================================
+st.sidebar.markdown(f"Logged in as **{st.session_state['name']}**")
+authenticator.logout("Logout", "sidebar")
+st.sidebar.markdown("---")
 st.sidebar.title("🔬 RGU Network Analyser")
 st.sidebar.markdown("---")
 

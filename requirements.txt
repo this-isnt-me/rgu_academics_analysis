@@ -1,0 +1,10 @@
+streamlit
+networkx
+pandas
+numpy
+plotly
+pyvis
+scipy
+python-louvain
+streamlit-authenticator
+pyyaml
