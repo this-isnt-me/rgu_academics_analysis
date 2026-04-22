@@ -17,13 +17,23 @@ def load_graph():
         )
     try:
         G = nx.read_graphml(GRAPH_PATH)
-        G = G.to_undirected()
+        # Convert to simple undirected graph (handles MultiGraph from some GraphML files)
+        if isinstance(G, nx.MultiGraph):
+            G = nx.Graph(G)
+        else:
+            G = G.to_undirected()
+
+        # Remove self-loops — nx.core_number and several other algorithms require a simple graph
+        G.remove_edges_from(list(nx.selfloop_edges(G)))
 
         incomplete = [
             n for n, d in G.nodes(data=True)
             if not d.get("school") or not d.get("job_title")
         ]
         G.remove_nodes_from(incomplete)
+
+        # Remove isolates created by incomplete-node removal or self-loop stripping
+        G.remove_nodes_from(list(nx.isolates(G)))
 
         return G, None
     except Exception as exc:
@@ -69,6 +79,7 @@ def graph_to_cache_args(G):
     edges_data = tuple(sorted(
         (min(u, v), max(u, v), G[u][v].get("weight", 1))
         for u, v in G.edges()
+        if u != v  # safety: exclude any self-loops not yet stripped
     ))
     return nodes_data, edges_data
 

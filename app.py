@@ -50,6 +50,7 @@ from utils.ona_metrics import (
     compute_ei_index,
     compute_school_metagraph,
     compute_school_bridges,
+    compute_blau_index,
 )
 from utils.visualisation import (
     get_school_color_map,
@@ -817,6 +818,39 @@ def page_assortativity():
             use_container_width=True,
         )
 
+    # --- Ego Network Diversity (Blau Index) ---
+    st.subheader("Ego Network Diversity — School Spread of Co-authorship Partners")
+    st.info(
+        "The **Blau Index** measures how spread across schools each academic's co-authorship "
+        "partners are. A score of **0** means all of an academic's joint publications are with "
+        "colleagues from a single school — no cross-school publishing diversity. A score close "
+        "to **1** means their co-authorship partners are almost perfectly distributed across all "
+        "schools — maximum cross-school diversity. Academics scoring near 0 are important for "
+        "understanding insularity; those scoring near 1 are likely key interdisciplinary connectors."
+    )
+    blau_df = safe_run(compute_blau_index, nd, ed, label="Blau index")
+    if blau_df is not None and not blau_df.empty:
+        fig_blau = px.histogram(
+            blau_df,
+            x="Blau Index (Diversity)",
+            nbins=30,
+            title="Distribution of Ego Network School Diversity (Blau Index)",
+            labels={"Blau Index (Diversity)": "Blau Index", "count": "Number of Academics"},
+        )
+        fig_blau.update_layout(height=350)
+        st.plotly_chart(fig_blau, use_container_width=True)
+
+        c_top, c_bot = st.columns(2)
+        with c_top:
+            st.markdown("**Top 15 — Most Diverse Co-authorship Partners**")
+            st.dataframe(blau_df.head(15), use_container_width=True, hide_index=True)
+        with c_bot:
+            st.markdown("**Bottom 15 — Least Diverse (most insular) Co-authorship Partners**")
+            st.dataframe(blau_df.tail(15).iloc[::-1].reset_index(drop=True), use_container_width=True, hide_index=True)
+
+        with st.expander("Full Blau Index table"):
+            st.dataframe(blau_df, use_container_width=True, hide_index=True)
+
     with st.expander("Technical notes"):
         st.markdown(
             """
@@ -824,6 +858,7 @@ def page_assortativity():
             - Rank assortativity: `nx.numeric_assortativity_coefficient(G, 'seniority_rank')`. Seniority mapping: Professor=4, Reader/Senior Lecturer/Associate Professor=3, Lecturer/Research Fellow=2, Research Assistant/default=1.
             - Both computations treat the graph as undirected — each edge is counted once.
             - Heatmap cells show total co-authored papers (sum of edge weights) between academics in each school or title band. Diagonal = intra-group co-authorship.
+            - Blau index: `1 − Σ pᵢ²` where pᵢ is the weighted proportion of co-authorship ties directed at school i. Computed per ego node using edge weights. Nodes with fewer than 2 co-authors are excluded.
             """
         )
 
@@ -944,7 +979,22 @@ def page_communities():
         return
 
     nd, ed = graph_to_cache_args(G)
-    result = safe_run(compute_communities, nd, ed, label="community detection")
+
+    resolution = st.slider(
+        "Resolution (Louvain granularity)",
+        min_value=0.25,
+        max_value=2.0,
+        value=1.0,
+        step=0.05,
+        help=(
+            "Controls the granularity of communities detected by the Louvain algorithm. "
+            "Lower values merge groups into fewer, larger communities. "
+            "Higher values split groups into more, smaller communities. "
+            "The default of 1.0 is the standard Louvain resolution."
+        ),
+    )
+
+    result = safe_run(compute_communities, nd, ed, resolution, label="community detection")
     if result is None:
         return
     partition, modularity, method = result
@@ -1015,11 +1065,11 @@ def page_communities():
     with st.expander("Technical notes"):
         st.markdown(
             """
-            - Primary method: `community.best_partition(G, weight='weight')` (python-louvain).
+            - Primary method: `community.best_partition(G, weight='weight', resolution=r, random_state=42)` (python-louvain). Results are reproducible for a fixed resolution.
             - Fallback: `nx.community.greedy_modularity_communities(G, weight='weight')`.
             - Modularity measures how much more densely connected community members are to each other than to the rest of the network. Values > 0.3 indicate meaningful community structure.
+            - Resolution parameter: values > 1 favour smaller, tighter communities; values < 1 produce fewer, larger groupings.
             - Hub: top-20% internal degree within community. Bridge: edges to ≥ 2 other communities. Peripheral: bottom-20% internal degree with no cross-community ties.
-            - Communities are stochastic for Louvain — results may vary slightly between runs.
             """
         )
 

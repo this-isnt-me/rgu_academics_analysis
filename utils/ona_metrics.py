@@ -196,10 +196,9 @@ def compute_articulation_points(nodes_data, edges_data) -> pd.DataFrame:
 @st.cache_data
 def compute_kcore(nodes_data, edges_data) -> pd.DataFrame:
     G = rebuild_graph(nodes_data, edges_data)
-    try:
-        core_num = nx.core_number(G)
-    except Exception:
-        core_num = {n: 0 for n in G.nodes()}
+    # Ensure the graph is simple — core_number requires no self-loops
+    G.remove_edges_from(list(nx.selfloop_edges(G)))
+    core_num = nx.core_number(G)
     rows = [
         {
             "Name": G.nodes[n].get("label", n),
@@ -245,8 +244,17 @@ def compute_school_fragmentation(nodes_data, edges_data) -> pd.DataFrame:
 # Community detection
 # ---------------------------------------------------------------------------
 @st.cache_data
-def compute_communities(nodes_data, edges_data):
-    """Returns (partition_dict, modularity, method_name)."""
+def compute_communities(nodes_data, edges_data, resolution: float = 1.0):
+    """
+    Returns (partition_dict, modularity, method_name).
+
+    Parameters
+    ----------
+    resolution : float
+        Louvain resolution parameter (default 1.0).
+        Values > 1 favour smaller, more cohesive communities.
+        Values < 1 favour larger, coarser communities.
+    """
     G = rebuild_graph(nodes_data, edges_data)
     partition = {}
     method = "unknown"
@@ -254,7 +262,12 @@ def compute_communities(nodes_data, edges_data):
 
     try:
         import community as community_louvain  # python-louvain
-        partition = community_louvain.best_partition(G, weight="weight")
+        partition = community_louvain.best_partition(
+            G,
+            weight="weight",
+            resolution=resolution,
+            random_state=42,  # reproducible results
+        )
         method = "Louvain"
         try:
             modularity = community_louvain.modularity(partition, G, weight="weight")
@@ -357,6 +370,64 @@ def classify_community_roles(G, partition: dict) -> dict[str, str]:
             roles[n] = "Member"
 
     return roles
+
+
+# ---------------------------------------------------------------------------
+# Ego Network Diversity (Blau Index)
+# ---------------------------------------------------------------------------
+
+@st.cache_data
+def compute_blau_index(nodes_data, edges_data) -> pd.DataFrame:
+    """
+    Weighted Blau index of school diversity in each academic's ego network.
+
+    For each node the function computes the proportion of total co-authorship
+    weight directed at each school among the node's neighbours, then applies:
+
+        Blau index = 1 − Σ p_i²
+
+    where p_i is the weighted proportion of edges to school i.
+
+    * 0.0 — all co-authorship with a single school (no diversity).
+    * 1.0 (theoretical max) — perfectly uniform spread across all schools.
+    * Academics with fewer than 2 co-authors are excluded (index undefined).
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: Name, School, Job Title, Blau Index (Diversity), Co-authors.
+        Sorted by Blau Index descending.
+    """
+    G = rebuild_graph(nodes_data, edges_data)
+    rows = []
+    for n in G.nodes():
+        d = G.nodes[n]
+        nbrs = list(G.neighbors(n))
+        if len(nbrs) < 2:
+            continue  # index undefined for isolates and degree-1 nodes
+        school_weights: dict[str, float] = {}
+        total_w = 0.0
+        for nb in nbrs:
+            w = float(G[n][nb].get("weight", 1))
+            s = G.nodes[nb].get("school", "Unknown")
+            school_weights[s] = school_weights.get(s, 0.0) + w
+            total_w += w
+        if total_w == 0:
+            continue
+        blau = 1.0 - sum((sw / total_w) ** 2 for sw in school_weights.values())
+        rows.append({
+            "Name": d.get("label", n),
+            "School": d.get("school", ""),
+            "Job Title": d.get("job_title", ""),
+            "Blau Index (Diversity)": round(blau, 4),
+            "Co-authors": len(nbrs),
+            "Schools Reached": len(school_weights),
+        })
+    return (
+        pd.DataFrame(rows)
+        .sort_values("Blau Index (Diversity)", ascending=False)
+        .reset_index(drop=True)
+    )
 
 
 # ---------------------------------------------------------------------------
