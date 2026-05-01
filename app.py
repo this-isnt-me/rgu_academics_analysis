@@ -121,7 +121,8 @@ authenticator = stauth.Authenticate(
 if st.session_state.get("authentication_status") is not True:
     _, _login_col, _ = st.columns([3, 4, 3])
     with _login_col:
-        st.image("image/logo.svg", use_container_width=True)
+        _, _logo_col, _ = st.columns([3, 4, 3])
+        _logo_col.image("image/logo.svg", use_container_width=True)
         authenticator.login()
     if st.session_state.get("authentication_status") is False:
         st.error("Username or password is incorrect.")
