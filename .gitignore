@@ -5,4 +5,4 @@ __pycache__/
 *.pyc
 config.yaml
 .env
-config.yaml
+.streamlit/secrets.toml

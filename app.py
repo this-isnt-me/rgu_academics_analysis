@@ -5,12 +5,9 @@ All analyses operate on undirected co-authorship graphs only.
 from __future__ import annotations
 
 import io
-import os
 import traceback
 
 import streamlit_authenticator as stauth
-import yaml
-from yaml.loader import SafeLoader
 
 import networkx as nx
 import pandas as pd
@@ -77,28 +74,45 @@ st.set_page_config(
 )
 
 # ============================================================
-# Authentication — config and initialisation
+# Brand styling
 # ============================================================
-if not os.path.exists("config.yaml"):
-    st.error(
-        "**config.yaml not found.** Please create it from the project template "
-        "before running the app. See the project README for instructions."
-    )
-    st.stop()
+st.markdown(
+    """
+    <style>
+    .stButton > button, button[kind="primaryFormSubmit"] {
+        background-color: #590606 !important;
+        border-color:     #590606 !important;
+        color:            #ffffff !important;
+    }
+    .stButton > button:hover, button[kind="primaryFormSubmit"]:hover {
+        background-color: #7a0909 !important;
+        border-color:     #7a0909 !important;
+        color:            #ffffff !important;
+    }
+    .stButton > button:active, button[kind="primaryFormSubmit"]:active {
+        background-color: #450505 !important;
+        border-color:     #450505 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-with open("config.yaml") as _f:
-    _config = yaml.load(_f, Loader=SafeLoader)
+# ============================================================
+# Authentication — initialised from st.secrets
+# ============================================================
+def _to_dict(obj):
+    """Recursively convert a Streamlit secrets AttrDict to a plain dict."""
+    if hasattr(obj, "items"):
+        return {k: _to_dict(v) for k, v in obj.items()}
+    return obj
 
-# SECURITY NOTES — MUST READ BEFORE DEPLOYMENT
-# 1. Run generate_passwords.py to hash all passwords before deploying.
-# 2. Change the cookie key in config.yaml to a long random string before deploying.
-# 3. Never commit config.yaml to a public Git repository — it is in .gitignore.
-# 4. Set cookie expiry_days to 0 in config.yaml for session-only login (no persistent cookie).
+
 authenticator = stauth.Authenticate(
-    _config["credentials"],
-    _config["cookie"]["name"],
-    _config["cookie"]["key"],
-    _config["cookie"]["expiry_days"],
+    _to_dict(st.secrets["credentials"]),
+    st.secrets["cookie"]["name"],
+    st.secrets["cookie"]["key"],
+    int(st.secrets["cookie"]["expiry_days"]),
 )
 
 # ============================================================
@@ -107,6 +121,7 @@ authenticator = stauth.Authenticate(
 if st.session_state.get("authentication_status") is not True:
     _, _login_col, _ = st.columns([3, 4, 3])
     with _login_col:
+        st.image("image/logo.svg", use_container_width=True)
         authenticator.login()
     if st.session_state.get("authentication_status") is False:
         st.error("Username or password is incorrect.")
@@ -135,8 +150,8 @@ if G_full.is_directed():
 # ============================================================
 # Sidebar — navigation & filters
 # ============================================================
-st.sidebar.markdown(f"Logged in as **{st.session_state['name']}**")
 authenticator.logout("Logout", "sidebar")
+st.sidebar.markdown(f"Logged in as **{st.session_state['name']}**")
 st.sidebar.markdown("---")
 st.sidebar.title("🔬 RGU Network Analyser")
 st.sidebar.markdown("---")
