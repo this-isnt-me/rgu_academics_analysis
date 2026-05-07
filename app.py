@@ -74,24 +74,128 @@ st.set_page_config(
 )
 
 # ============================================================
-# Brand styling
+# Brand styling — dark mode
 # ============================================================
 st.markdown(
     """
     <style>
-    .stButton > button, button[kind="primaryFormSubmit"] {
+    /* ── Base surfaces ─────────────────────────────────────── */
+    .stApp {
+        background-color: #0F1117;
+        color: #E8E4DC;
+    }
+
+    /* ── Sidebar ────────────────────────────────────────────── */
+    [data-testid="stSidebar"] {
+        background-color: #1C1F26;
+        border-right: 2px solid #007480;
+    }
+    [data-testid="stSidebar"] * {
+        color: #E8E4DC !important;
+    }
+
+    /* ── Page headings ──────────────────────────────────────── */
+    h1 {
+        color: #D1B49C !important;
+        border-bottom: 2px solid #007480;
+        padding-bottom: 0.3rem;
+    }
+    h2 {
+        color: #D1B49C !important;
+        border-left: 4px solid #590606;
+        padding-left: 0.6rem;
+    }
+    h3 {
+        color: #D1B49C !important;
+    }
+
+    /* ── Metric cards ───────────────────────────────────────── */
+    [data-testid="stMetric"] {
+        background-color: #1C1F26;
+        border: 1px solid #590606;
+        border-radius: 6px;
+        padding: 0.75rem 1rem;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #D1B49C !important;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    [data-testid="stMetricValue"] {
+        color: #E8E4DC !important;
+    }
+    [data-testid="stMetricDelta"] {
+        color: #007480 !important;
+    }
+
+    /* ── Info / warning / success callout boxes ─────────────── */
+    [data-testid="stInfo"] {
+        background-color: rgba(0, 116, 128, 0.15);
+        border-left: 4px solid #007480;
+        color: #E8E4DC;
+    }
+    [data-testid="stWarning"] {
+        background-color: rgba(209, 180, 156, 0.12);
+        border-left: 4px solid #D1B49C;
+        color: #E8E4DC;
+    }
+    [data-testid="stSuccess"] {
+        background-color: rgba(0, 116, 128, 0.12);
+        border-left: 4px solid #007480;
+        color: #E8E4DC;
+    }
+    [data-testid="stError"] {
+        background-color: rgba(89, 6, 6, 0.20);
+        border-left: 4px solid #590606;
+        color: #E8E4DC;
+    }
+
+    /* ── Expander ───────────────────────────────────────────── */
+    [data-testid="stExpander"] {
+        border: 1px solid #007480;
+        border-radius: 6px;
+        background-color: #1C1F26;
+    }
+    [data-testid="stExpander"] summary {
+        color: #D1B49C !important;
+    }
+
+    /* ── DataFrames / tables ────────────────────────────────── */
+    [data-testid="stDataFrame"] {
+        border: 1px solid #590606;
+        border-radius: 4px;
+    }
+
+    /* ── Primary buttons ────────────────────────────────────── */
+    .stButton > button,
+    button[kind="primaryFormSubmit"] {
         background-color: #590606 !important;
         border-color:     #590606 !important;
         color:            #ffffff !important;
+        border-radius:    5px;
     }
-    .stButton > button:hover, button[kind="primaryFormSubmit"]:hover {
+    .stButton > button:hover,
+    button[kind="primaryFormSubmit"]:hover {
         background-color: #7a0909 !important;
         border-color:     #7a0909 !important;
         color:            #ffffff !important;
     }
-    .stButton > button:active, button[kind="primaryFormSubmit"]:active {
+    .stButton > button:active,
+    button[kind="primaryFormSubmit"]:active {
         background-color: #450505 !important;
         border-color:     #450505 !important;
+    }
+
+    /* ── Dividers ───────────────────────────────────────────── */
+    hr {
+        border-color: #007480;
+        opacity: 0.4;
+    }
+
+    /* ── Caption / small text ───────────────────────────────── */
+    .stCaption, [data-testid="stCaptionContainer"] {
+        color: #A09A92 !important;
     }
     </style>
     """,
@@ -170,7 +274,6 @@ PAGES = [
     "10. School-Level Collaboration Map",
     "11. School Bridges & Key Connectors",
     "12. HITS Analysis — Hubs & Authorities",
-    "13. Download & Export",
 ]
 
 page = st.sidebar.radio("Navigate to:", PAGES, label_visibility="collapsed")
@@ -1310,107 +1413,6 @@ def page_hits():
 
 
 # ============================================================
-# Page 12 — Download & Export
-# ============================================================
-def page_download():
-    st.header("Download & Export")
-    st.caption("Export the current filtered graph and computed metrics as CSV files.")
-
-    if not min_nodes_ok(G, minimum=1):
-        return
-
-    nd, ed = graph_to_cache_args(G)
-
-    # Node list
-    node_df = get_node_dataframe(G)
-    st.subheader("Node List")
-    st.dataframe(node_df, use_container_width=True, hide_index=True)
-    st.download_button(
-        "⬇ Download Node List (CSV)",
-        data=node_df.to_csv(index=False).encode(),
-        file_name="rgu_nodes.csv",
-        mime="text/csv",
-    )
-
-    # Edge list
-    edge_rows = [
-        {
-            "Source": u,
-            "Target": v,
-            "Source School": G.nodes[u].get("school", ""),
-            "Target School": G.nodes[v].get("school", ""),
-            "Co-authored Papers (Weight)": d.get("weight", 1),
-        }
-        for u, v, d in G.edges(data=True)
-    ]
-    edge_df = pd.DataFrame(edge_rows)
-    st.subheader("Edge List")
-    st.dataframe(edge_df, use_container_width=True, hide_index=True)
-    st.download_button(
-        "⬇ Download Edge List (CSV)",
-        data=edge_df.to_csv(index=False).encode(),
-        file_name="rgu_edges.csv",
-        mime="text/csv",
-    )
-
-    # Centrality metrics
-    st.subheader("Centrality Metrics")
-    with st.spinner("Computing centrality metrics for export…"):
-        dc = safe_run(compute_degree_centrality, nd, ed, label="degree centrality")
-        wd = safe_run(compute_weighted_degree, nd, ed, label="weighted degree")
-        bc = safe_run(compute_betweenness_centrality, nd, ed, label="betweenness centrality")
-        ec = safe_run(compute_eigenvector_centrality, nd, ed, label="eigenvector centrality")
-        hits_res = safe_run(compute_hits, nd, ed, label="HITS")
-
-    if all(x is not None for x in [dc, wd, bc, ec, hits_res]):
-        hubs, _ = hits_res
-        cent_rows = []
-        for n in G.nodes():
-            d = G.nodes[n]
-            cent_rows.append({
-                "Name": d.get("label", n),
-                "School": d.get("school", ""),
-                "Job Title": d.get("job_title", ""),
-                "Degree Centrality": round(dc.get(n, 0), 6),
-                "Weighted Degree": wd.get(n, 0),
-                "Betweenness Centrality": round(bc.get(n, 0), 6),
-                "Eigenvector Centrality": round(ec.get(n, 0), 6),
-                "HITS Score": round(hubs.get(n, 0), 6),
-            })
-        cent_df = pd.DataFrame(cent_rows).sort_values("Weighted Degree", ascending=False)
-        st.dataframe(cent_df, use_container_width=True, hide_index=True)
-        st.download_button(
-            "⬇ Download Centrality Metrics (CSV)",
-            data=cent_df.to_csv(index=False).encode(),
-            file_name="rgu_centrality.csv",
-            mime="text/csv",
-        )
-
-    # Community assignments
-    st.subheader("Community Assignments")
-    with st.spinner("Computing community assignments…"):
-        comm_result = safe_run(compute_communities, nd, ed, label="communities")
-    if comm_result:
-        partition, modularity, method = comm_result
-        comm_df = pd.DataFrame([
-            {
-                "Name": G.nodes[n].get("label", n),
-                "School": G.nodes[n].get("school", ""),
-                "Job Title": G.nodes[n].get("job_title", ""),
-                "Community": partition.get(n, -1),
-            }
-            for n in G.nodes()
-        ]).sort_values("Community")
-        st.dataframe(comm_df, use_container_width=True, hide_index=True)
-        st.download_button(
-            "⬇ Download Community Assignments (CSV)",
-            data=comm_df.to_csv(index=False).encode(),
-            file_name="rgu_communities.csv",
-            mime="text/csv",
-        )
-
-
-# ============================================================
 # Page 11 — School Bridges & Key Connectors
 # ============================================================
 def page_school_bridges():
@@ -1661,7 +1663,6 @@ ROUTE_MAP = {
     "10. School-Level Collaboration Map": page_school_map,
     "11. School Bridges & Key Connectors": page_school_bridges,
     "12. HITS Analysis — Hubs & Authorities": page_hits,
-    "13. Download & Export": page_download,
 }
 
 ROUTE_MAP[page]()
